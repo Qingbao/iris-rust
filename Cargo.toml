@@ -7,8 +7,28 @@ license = "MIT"
 repository = "https://github.com/Qingbao/iris-rust"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "iris_rust"
+path = "src/lib.rs"
+
+[[bin]]
+name = "iris"
+path = "src/bin/iris.rs"
 
 [dependencies]
-image = "0.24"
+ndarray = { version = "0.16", features = ["rayon"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "jpeg"] }
+imageproc = "0.25"
+rustfft = "6"
+bitvec = { version = "1", features = ["serde"] }
+rayon = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+bincode = { version = "2", features = ["serde"] }
+indicatif = { version = "0.17", features = ["rayon"] }
+anyhow = "1"
+thiserror = "1"
 
+[profile.release]
+lto = "thin"
+codegen-units = 1

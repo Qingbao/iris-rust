@@ -12,3 +12,7 @@ Cargo.lock
 *.exe
 *.pdb
 
+/samples/
+
+*.csv
+*.bin

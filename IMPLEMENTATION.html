@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>iris-rust — implementation summary</title>
+<style>
+  :root {
+    --bg: #fafaf7;
+    --fg: #1a1a1a;
+    --muted: #5a5a5a;
+    --accent: #b94a00;
+    --accent-soft: #fff1e6;
+    --border: #d8d4cc;
+    --code-bg: #f0ece4;
+    --good: #1d6f42;
+    --warn: #8a6d00;
+  }
+  html { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; line-height: 1.55; color: var(--fg); background: var(--bg); }
+  body { max-width: 900px; margin: 2rem auto; padding: 0 1.5rem 4rem; }
+  h1 { font-size: 2rem; margin-bottom: 0.2rem; }
+  h2 { margin-top: 2.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
+  h3 { margin-top: 1.8rem; color: var(--accent); }
+  .subtitle { color: var(--muted); margin-top: 0; }
+  code, pre { font-family: ui-monospace, "Cascadia Code", "Consolas", monospace; font-size: 0.92em; }
+  code { background: var(--code-bg); padding: 0.05em 0.35em; border-radius: 3px; }
+  pre { background: var(--code-bg); padding: 0.9rem 1.1rem; border-radius: 6px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; margin: 1rem 0; width: 100%; }
+  th, td { border-bottom: 1px solid var(--border); padding: 0.45rem 0.7rem; text-align: left; vertical-align: top; }
+  th { background: var(--accent-soft); }
+  .metric { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .ok { color: var(--good); font-weight: 600; }
+  .pill { display: inline-block; padding: 0.05em 0.55em; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 0.85em; font-weight: 600; }
+  .pipeline { display: grid; grid-template-columns: 1fr; gap: 0.4rem; margin: 1.2rem 0; }
+  .pipeline > div { background: white; border: 1px solid var(--border); border-left: 4px solid var(--accent); padding: 0.55rem 0.85rem; border-radius: 4px; }
+  .pipeline > div b { color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
+  blockquote { margin: 1rem 0; padding: 0.6rem 1rem; border-left: 4px solid var(--accent); background: var(--accent-soft); color: var(--fg); }
+  ul { padding-left: 1.4rem; }
+  .tag { font-size: 0.8em; color: var(--muted); }
+  footer { margin-top: 4rem; color: var(--muted); font-size: 0.9em; }
+</style>
+</head>
+<body>
+
+<h1>iris-rust</h1>
+<p class="subtitle">Rust port of the Daugman iris-recognition pipeline from <a href="https://github.com/Qingbao/iris">Qingbao/iris</a> (MATLAB, <code>Daugman/</code> branch)</p>
+
+<p>
+  <span class="pill">CASIA v1.0</span>
+  <span class="pill">756 images × 108 subjects</span>
+  <span class="pill">9600-bit templates</span>
+</p>
+
+<h2>Result</h2>
+<table>
+  <thead>
+    <tr><th>Metric</th><th>Rust port</th><th>MATLAB reference</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Equal Error Rate (EER)</td><td class="metric ok">0.0172</td><td class="metric">0.0157</td></tr>
+    <tr><td>Intra-class Hamming dist. (mean ± σ)</td><td class="metric">0.298 ± 0.053</td><td class="metric">~0.30</td></tr>
+    <tr><td>Inter-class Hamming dist. (mean ± σ)</td><td class="metric">0.472 ± 0.014</td><td class="metric">~0.47</td></tr>
+    <tr><td>Enroll all 756 images</td><td class="metric ok">13.4 s</td><td class="metric">~30–60 min</td></tr>
+    <tr><td>Score 283 122 inter-class pairs</td><td class="metric ok">89 s</td><td class="metric">hours</td></tr>
+    <tr><td>Deployment</td><td>single 4 MB binary</td><td>MATLAB license</td></tr>
+  </tbody>
+</table>
+
+<blockquote>The Rust port matches the MATLAB pipeline's recognition quality (EER 0.0172 vs 0.0157) while removing the MATLAB dependency and speeding the end-to-end run from hours to seconds.</blockquote>
+
+<h2>Pipeline</h2>
+<p>Same algorithmic stages as the original Masek / Daugman pipeline. Each stage is one module in <code>src/</code>.</p>
+
+<div class="pipeline">
+  <div><b>1. Load</b> <span class="tag">casia.rs</span> — Walk <code>{subject:03}/{session}/{subject:03}_{session}_{k}.bmp</code>; decode BMP → row-major <code>Array2&lt;f64&gt;</code> grayscale.</div>
+  <div><b>2. Segment iris &amp; pupil</b> <span class="tag">daugman.rs + segment.rs</span> — Coarse 3-D Hough space search over the integro-differential operator <code>∂/∂r ∮ I(x,y)/2πr</code>, then a 16-pixel fine search around the coarse peak. Outer (limbus) search restricted to side-arcs to skip eyelids.</div>
+  <div><b>3. Find eyelids</b> <span class="tag">eyelid.rs</span> — <code>imageproc::edges::canny</code> on strips above &amp; below the pupil, then a hand-rolled Radon transform (180 θ-bins × ⌈√(h²+w²)⌉ ρ-bins) for the dominant line.</div>
+  <div><b>4. Mask noise</b> <span class="tag">segment.rs</span> — Above-top-eyelid + below-bottom-eyelid + pixels &lt; 80 (CASIA eyelash threshold) are marked <code>None</code>.</div>
+  <div><b>5. Polar unwrap</b> <span class="tag">normalize.rs</span> — Daugman rubber-sheet with pupil↔iris offset correction; bilinear sample to a 22-row polar array, trim the outer 2 rings → final shape (20, 240). <code>None</code> propagates through interpolation.</div>
+  <div><b>6. Feature encode</b> <span class="tag">encode.rs</span> — Per polar row: forward FFT (rustfft) × 1-D log-Gabor frequency response × inverse FFT. Phase quantize each complex sample into 2 bits: <code>bit₀ = Re&gt;0</code>, <code>bit₁ = Im&gt;0</code>. Result is a 20×480 = 9600-bit template plus a 9600-bit noise mask (NaN-region ∨ <code>|E|&lt;10⁻⁴</code>).</div>
+  <div><b>7. Match</b> <span class="tag">matching.rs</span> — For each of 17 circular column shifts s ∈ −8..=8: <code>(t₁≪s ⊕ t₂) ∧ ¬(m₁≪s ∨ m₂)</code>, divide popcount by valid-bit count, keep the minimum. Operates on packed <code>BitVec&lt;u64&gt;</code>.</div>
+  <div><b>8. EER</b> <span class="tag">bin/iris.rs</span> — Sweep threshold 0..1 in 0.01 steps, compute FMR &amp; FNMR, return the crossover.</div>
+</div>
+
+<h2>Module map</h2>
+<table>
+  <thead><tr><th>MATLAB source</th><th>Rust module</th></tr></thead>
+  <tbody>
+    <tr><td><code>read_all_images.m</code>, <code>loadimages.m</code></td><td><code>casia.rs</code> + <code>enroll</code> subcommand</td></tr>
+    <tr><td><code>SearchInnerBoundary.m</code>, <code>SearchOuterBoundary.m</code>, <code>ContourIntegralCircular.m</code></td><td><code>daugman.rs</code></td></tr>
+    <tr><td><code>findline.m</code> + <code>canny.m</code>/<code>adjgamma.m</code>/<code>nonmaxsup.m</code>/<code>hysthresh.m</code></td><td><code>eyelid.rs</code> (uses <code>imageproc::edges::canny</code>)</td></tr>
+    <tr><td><code>segmentiris.m</code></td><td><code>segment.rs</code></td></tr>
+    <tr><td><code>normaliseiris.m</code></td><td><code>normalize.rs</code></td></tr>
+    <tr><td><code>gaborconvolve.m</code> + <code>encode.m</code></td><td><code>encode.rs</code> (rustfft)</td></tr>
+    <tr><td><code>gethammingdistance.m</code> + <code>shiftbits.m</code></td><td><code>matching.rs</code> (BitVec)</td></tr>
+    <tr><td><code>matching.m</code> + <code>EER_duagman.m</code></td><td><code>match</code> &amp; <code>eer</code> subcommands</td></tr>
+  </tbody>
+</table>
+
+<h2>Dependencies</h2>
+<table>
+  <tbody>
+    <tr><td><code>ndarray</code></td><td>2-D / 3-D arrays for images and the Hough space</td></tr>
+    <tr><td><code>image</code></td><td>BMP read &amp; JPG diagnostics write</td></tr>
+    <tr><td><code>imageproc</code></td><td>Canny edge detector</td></tr>
+    <tr><td><code>rustfft</code></td><td>FFT / IFFT for the log-Gabor stage</td></tr>
+    <tr><td><code>bitvec</code></td><td>Packed 9600-bit templates &amp; masks; SIMD-friendly XOR/AND/popcount</td></tr>
+    <tr><td><code>rayon</code></td><td>Parallel enroll + parallel pair matching</td></tr>
+    <tr><td><code>clap</code></td><td>Subcommand CLI</td></tr>
+    <tr><td><code>serde</code> + <code>bincode</code></td><td>Persist <code>Vec&lt;EnrolledTemplate&gt;</code> to a single binary file</td></tr>
+    <tr><td><code>indicatif</code></td><td>Progress bars</td></tr>
+    <tr><td><code>anyhow</code> / <code>thiserror</code></td><td>Error handling</td></tr>
+  </tbody>
+</table>
+
+<h2>CLI surface</h2>
+<pre><code>iris enroll  --casia &lt;DIR&gt; --out templates.bin [--diagnostics &lt;DIR&gt;] [--limit N]
+iris match   --templates templates.bin --out hd_same.csv  --intra
+iris match   --templates templates.bin --out hd_diff.csv  --inter
+iris eer     --same hd_same.csv --diff hd_diff.csv [--curve eer_curve.csv]</code></pre>
+
+<h2>Reproduce the result</h2>
+<pre><code>cargo build --release
+./target/release/iris enroll \
+    --casia "samples/CASIA-IrisV1/CASIA Iris Image Database (version 1.0)" \
+    --out templates.bin
+./target/release/iris match --templates templates.bin --out hd_same.csv --intra
+./target/release/iris match --templates templates.bin --out hd_diff.csv --inter
+./target/release/iris eer   --same hd_same.csv --diff hd_diff.csv</code></pre>
+
+<h2>Implementation notes worth re-reading</h2>
+
+<h3>Bit-layout invariants</h3>
+<p>Three shapes are load-bearing across modules; change any one and the matching code's bit arithmetic falls apart:</p>
+<ul>
+  <li>Polar unwrap: <code>Array2&lt;Option&lt;f64&gt;&gt;</code> of shape <code>(20, 240)</code>.</li>
+  <li>Template &amp; mask: <code>BitVec&lt;u64, Lsb0&gt;</code> of 9600 bits, conceptually <code>(20 rows, 480 cols)</code> row-major. Column <code>c</code> = <code>2 × angular_idx + {0:Re, 1:Im}</code>.</li>
+  <li>Shift sweep: each unit of shift moves <em>two</em> bit columns (one real + one imaginary), so <code>shift_columns(±1)</code> rotates by 2 of the 480 columns.</li>
+</ul>
+
+<h3>NaN vs Option&lt;f64&gt;</h3>
+<p>MATLAB's pipeline marks noise pixels with literal <code>NaN</code> values; the Rust port replaces this with <code>Option&lt;f64&gt;</code>. Bilinear interpolation propagates <code>None</code>: if any of the four corner samples is <code>None</code>, the output is <code>None</code>. The encoder fills <code>None</code> cells with the row-mean before FFT (mirroring the MATLAB averaging step), but keeps the original noise mask intact for the matching stage.</p>
+
+<h3>FFT normalization</h3>
+<p>MATLAB's <code>ifft</code> divides by <em>N</em>; rustfft does not. The encoder rescales the inverse FFT output by <code>1/N</code> so the <code>|E| &lt; 10⁻⁴</code> amplitude threshold for the noise mask matches MATLAB's behaviour. Sign-based phase quantization is unaffected.</p>
+
+<h3>Diagnostic JPGs</h3>
+<p>With <code>--diagnostics &lt;DIR&gt;</code>, each enrolled image writes three files mirroring the MATLAB <code>diagnostics/</code> convention from <code>createiristemplate.m</code>:</p>
+<ul>
+  <li><code>&lt;stem&gt;-segmented.jpg</code> — original eye with iris &amp; pupil circles drawn in white.</li>
+  <li><code>&lt;stem&gt;-polar.jpg</code> — the 20×240 polar unwrap (vertical = radial, horizontal = angle).</li>
+  <li><code>&lt;stem&gt;-noise.jpg</code> — binary noise mask (white = excluded).</li>
+</ul>
+
+<h2>Performance</h2>
+<table>
+  <thead><tr><th>Stage</th><th>Time</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Enroll 756 images</td><td>13.4 s</td><td>Rayon across cores. Per-image segmentation dominates (3-D Hough sweep).</td></tr>
+    <tr><td>Match 2 268 intra-class pairs</td><td>0.7 s</td><td>—</td></tr>
+    <tr><td>Match 283 122 inter-class pairs</td><td>89 s</td><td>17 shifts × 9600-bit XOR per pair. Currently clones BitVecs per shift — known optimization target.</td></tr>
+    <tr><td>EER computation</td><td>&lt; 0.1 s</td><td>101-point threshold sweep over the loaded HD CSVs.</td></tr>
+  </tbody>
+</table>
+
+<h2>Out of scope</h2>
+<ul>
+  <li><b>Hough algorithm</b> — only the better-performing Daugman branch was ported. Adding Hough later means swapping <code>daugman.rs</code> for a <code>hough.rs</code> behind a trait.</li>
+  <li><b>MATLAB <code>.mat</code> interop</b> — templates persist as a single bincode file, not a <code>.mat</code> file.</li>
+  <li><b>Bit-exact match against MATLAB</b> — Canny / FFT ordering differences are tolerated since the EER target is "same ballpark."</li>
+</ul>
+
+<footer>
+  Original MATLAB sources: <a href="https://github.com/Qingbao/iris">github.com/Qingbao/iris</a> (see the <code>Daugman/</code> directory).
+</footer>
+
+</body>
+</html>
